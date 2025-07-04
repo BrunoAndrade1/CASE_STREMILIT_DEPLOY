@@ -214,6 +214,42 @@ def check_api_health():
 
 # Carregar categorias
 @st.cache_data(ttl=300)
+
+col1_train, col2_train, col3_train = st.columns([1, 2, 1])
+with col2_train:
+    st.markdown("### 🚨 CONFIGURAÇÃO INICIAL")
+    st.warning("O modelo ainda não foi treinado na API. Clique no botão abaixo para iniciar o treinamento.")
+    
+    if st.button("🚀 TREINAR MODELO NA API", type="primary", use_container_width=True):
+        with st.spinner("Iniciando treinamento do modelo..."):
+            try:
+                import requests
+                response = requests.post(f"{API_URL}/train")
+                result = response.json()
+                
+                if response.status_code == 200:
+                    st.success(f"✅ {result.get('message', 'Treinamento iniciado!')}")
+                    st.info("O treinamento demora cerca de 2-5 minutos. Verifique o status abaixo.")
+                else:
+                    st.error(f"Erro: {result}")
+            except Exception as e:
+                st.error(f"Erro ao conectar com a API: {str(e)}")
+    
+    # Botão para verificar status
+    if st.button("🔍 Verificar Status do Modelo", use_container_width=True):
+        try:
+            response = requests.get(f"{API_URL}/health")
+            health_data = response.json()
+            
+            if health_data.get('model_loaded'):
+                st.success("✅ Modelo carregado e pronto para uso!")
+            else:
+                st.warning("⏳ Modelo ainda não está pronto. Aguarde mais um pouco...")
+                st.json(health_data)
+        except Exception as e:
+            st.error(f"Erro ao verificar status: {str(e)}")
+
+st.markdown("---")
 def load_categories():
     """Carrega categorias disponíveis da API"""
     try:

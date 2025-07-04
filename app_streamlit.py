@@ -23,19 +23,20 @@ except:
     client = None
 
 # Tentar importar spaCy
+# Novo Bloco (para colocar no lugar)
 try:
+    st.write("DEBUG: Tentando importar spacy...")
     import spacy
-    # Tentar carregar modelo em português ou inglês
-    try:
-        nlp = spacy.load("pt_core_news_sm")
-    except:
-        try:
-            nlp = spacy.load("en_core_web_sm")
-        except:
-            # Se não tiver modelo, criar pipeline básico
-            nlp = spacy.blank("pt")
+    st.write("DEBUG: spaCy importado com sucesso!")
+
+    st.write("DEBUG: Tentando carregar o modelo de linguagem 'pt_core_news_sm'...")
+    nlp = spacy.load("pt_core_news_sm")
+    st.write("DEBUG: Modelo spaCy carregado com sucesso!")
+
     SPACY_AVAILABLE = True
-except:
+except Exception as e:
+    # ISSO IRÁ IMPRIMIR O ERRO REAL NA TELA
+    st.error(f"ERRO DETALHADO DO SPACY: {e}")
     SPACY_AVAILABLE = False
     nlp = None
 

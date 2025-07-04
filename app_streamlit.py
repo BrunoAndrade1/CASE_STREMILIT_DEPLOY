@@ -49,6 +49,7 @@ st.set_page_config(
 
 # Configurações
 API_URL = os.getenv("KICKSTARTER_API_URL", "http://localhost:8000")
+st.write(f"DEBUG: Tentando conectar na API em: {API_URL}")
 
 # Base de dados de usuários (requisito do case)
 USERS_DATABASE = {

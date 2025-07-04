@@ -961,7 +961,8 @@ def get_chat_response(user_message, context=None):
                 
                 # Fazer predição real com a API diretamente
                 try:
-                    response = requests.post(f"{API_URL}/predict", json=project_data_for_api)
+                    # Linha corrigida
+                    response = requests.post(f"{API_URL}/predict", json=project_data_for_api, timeout=90)
                     
                     if response.status_code == 200:
                         prediction_result = response.json()

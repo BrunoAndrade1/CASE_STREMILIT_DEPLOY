@@ -205,7 +205,7 @@ if 'extraction_method' not in st.session_state:
 def check_api_health():
     """Verifica se a API está online"""
     try:
-        response = requests.get(f"{API_URL}/health", timeout=5)
+        response = requests.get(f"{API_URL}/health", timeout=60)
         return response.status_code == 200
     except:
         return False

@@ -9,183 +9,7 @@ import time
 import re
 import os
 from typing import Dict, Optional, Any
-# ========== ADICIONAR APÓS OS IMPORTS ==========
 
-# Classes do modelo (copiar do train_model.py)
-class KickstarterPreprocessor:
-    """Classe para processar dados do Kickstarter"""
-    
-    def __init__(self):
-        self.label_encoders = {}
-        self.scaler = StandardScaler()
-        self.category_stats = None
-        self.country_stats = None
-        self.features_selected = [
-            'cat_success_rate', 'usd_goal_real', 'campaign_days', 
-            'goal_magnitude', 'cat_mean_goal', 'name_word_count',
-            'cat_median_goal', 'goal_per_day', 'country_success_rate',
-            'launch_year', 'main_category', 'name_length',
-            'goal_category_ratio', 'country', 'goal_rounded'
-        ]
-    
-    def create_features(self, df):
-        """Cria features necessárias"""
-        df = df.copy()
-        
-        df['deadline'] = pd.to_datetime(df['deadline'], errors='coerce')
-        df['launched'] = pd.to_datetime(df['launched'], errors='coerce')
-        
-        df['campaign_days'] = (df['deadline'] - df['launched']).dt.days
-        df['launch_year'] = df['launched'].dt.year
-        df['campaign_days'] = df['campaign_days'].clip(lower=1, upper=365)
-        
-        df['name_length'] = df['name'].fillna('').str.len()
-        df['name_word_count'] = df['name'].fillna('').str.split().str.len()
-        
-        df['usd_goal_real'] = df['usd_goal_real'].clip(upper=1e8)
-        df['goal_magnitude'] = np.log10(df['usd_goal_real'].clip(lower=1) + 1)
-        df['goal_rounded'] = (df['usd_goal_real'] % 1000 == 0).astype(int)
-        
-        return df
-    
-    def transform(self, df):
-        """Transforma dados para predição"""
-        df = self.create_features(df)
-        
-        df = df.merge(self.category_stats, left_on='main_category', right_index=True, how='left')
-        df = df.merge(self.country_stats, left_on='country', right_index=True, how='left')
-        
-        df['cat_success_rate'].fillna(0.35, inplace=True)
-        df['cat_mean_goal'].fillna(10000, inplace=True)
-        df['cat_median_goal'].fillna(5000, inplace=True)
-        df['country_success_rate'].fillna(0.35, inplace=True)
-        
-        df['goal_per_day'] = df['usd_goal_real'] / df['campaign_days'].replace(0, 1)
-        df['goal_category_ratio'] = df['usd_goal_real'] / df['cat_median_goal'].replace(0, 1)
-        
-        df['goal_per_day'] = df['goal_per_day'].replace([np.inf, -np.inf], 0).fillna(0)
-        df['goal_category_ratio'] = df['goal_category_ratio'].replace([np.inf, -np.inf], 1).fillna(1)
-        
-        for col, encoder in self.label_encoders.items():
-            known_values = set(encoder.classes_)
-            df[col] = df[col].apply(lambda x: x if x in known_values else list(known_values)[0])
-            df[col] = encoder.transform(df[col])
-        
-        X = df[self.features_selected]
-        X_scaled = self.scaler.transform(X)
-        
-        return X_scaled
-
-
-class KickstarterPredictor:
-    """Classe para fazer predições"""
-    
-    def __init__(self, model, preprocessor, threshold=0.5):
-        self.model = model
-        self.preprocessor = preprocessor
-        self.threshold = threshold
-    
-    def predict_single(self, project_data):
-        """Faz predição para um projeto"""
-        df = pd.DataFrame([project_data])
-        X = self.preprocessor.transform(df)
-        proba = self.model.predict_proba(X)[0, 1]
-        prediction = int(proba >= self.threshold)
-        recommendations = self._generate_recommendations(project_data, proba)
-        
-        return {
-            'success_probability': float(proba),
-            'prediction': 'Sucesso' if prediction else 'Falha',
-            'confidence': self._calculate_confidence(proba),
-            'recommendations': recommendations,
-            'threshold_used': self.threshold
-        }
-    
-    def _calculate_confidence(self, proba):
-        distance = abs(proba - self.threshold)
-        if distance > 0.3:
-            return 'Alta'
-        elif distance > 0.15:
-            return 'Média'
-        else:
-            return 'Baixa'
-    
-    def _generate_recommendations(self, project_data, proba):
-        recommendations = []
-        
-        goal = project_data.get('usd_goal_real', 0)
-        if goal > 50000:
-            recommendations.append("⚠️ Meta muito alta. Considere reduzir para aumentar chances.")
-        elif goal < 1000:
-            recommendations.append("✅ Meta modesta, boa estratégia para primeira campanha.")
-        else:
-            recommendations.append("✅ Meta dentro da faixa recomendada.")
-        
-        if 'campaign_days' not in project_data:
-            launched = pd.to_datetime(project_data.get('launched'))
-            deadline = pd.to_datetime(project_data.get('deadline'))
-            campaign_days = (deadline - launched).days
-        else:
-            campaign_days = project_data.get('campaign_days')
-            
-        if campaign_days < 20:
-            recommendations.append("⚠️ Campanha muito curta. Ideal entre 25-35 dias.")
-        elif campaign_days > 45:
-            recommendations.append("⚠️ Campanha muito longa. Pode perder momentum.")
-        else:
-            recommendations.append("✅ Duração adequada da campanha.")
-        
-        name_words = len(project_data.get('name', '').split())
-        if name_words < 3:
-            recommendations.append("💡 Título muito curto. Seja mais descritivo.")
-        elif name_words > 10:
-            recommendations.append("💡 Título muito longo. Seja mais conciso.")
-        
-        if proba < 0.3:
-            recommendations.append("🔴 Risco alto de falha. Revise estratégia completa.")
-        elif proba < 0.5:
-            recommendations.append("🟡 Chances moderadas. Pequenos ajustes podem fazer diferença.")
-        elif proba < 0.7:
-            recommendations.append("🟢 Boas chances de sucesso. Mantenha execução forte.")
-        else:
-            recommendations.append("🌟 Excelentes chances! Foque na execução.")
-        
-        return recommendations
-
-
-# Função para carregar modelo localmente
-@st.cache_resource
-def load_model_local():
-    """Carrega o modelo localmente"""
-    try:
-        model_path = 'kickstarter_model_v1.pkl'
-        
-        # Verificar se existe
-        if not os.path.exists(model_path):
-            st.error("❌ Modelo não encontrado!")
-            st.info("Execute python download_model.py para baixar o modelo")
-            return None, None
-        
-        # Carregar
-        model_data = joblib.load(model_path)
-        
-        # Criar predictor
-        predictor = KickstarterPredictor(
-            model=model_data['model'],
-            preprocessor=model_data['preprocessor'],
-            threshold=model_data['optimal_threshold']
-        )
-        
-        return predictor, model_data
-        
-    except Exception as e:
-        st.error(f"Erro ao carregar modelo: {str(e)}")
-        return None, None
-
-# Carregar modelo
-predictor_local, model_data_local = load_model_local()
-
-# ========== FIM DAS ADIÇÕES ==========
 # Inicializar session state para controle do spaCy
 if 'use_spacy' not in st.session_state:
     st.session_state.use_spacy = True  # Ativado por padrão
@@ -2237,7 +2061,52 @@ with tab3:
 # Sidebar com informações
 with st.sidebar:
     st.header("ℹ️ Como funciona")
+        with st.expander("🔧 Configurar API", expanded=False):
+        st.markdown("### Conexão com a API")
+        
+        # Pegar URL atual ou usar padrão
+        current_url = st.session_state.get('api_url', API_URL)
+        
+        # Input para URL
+        new_url = st.text_input(
+            "URL da API:",
+            value=current_url,
+            placeholder="https://abc123.ngrok-free.app",
+            help="Cole aqui a URL do ngrok ou use http://localhost:8000"
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Testar", use_container_width=True):
+                try:
+                    import requests
+                    response = requests.get(f"{new_url}/health", timeout=5)
+                    if response.status_code == 200:
+                        st.success("✅ OK!")
+                        st.session_state.api_url = new_url
+                    else:
+                        st.error("❌ Erro!")
+                except:
+                    st.error("❌ Falhou!")
+        
+        with col2:
+            if st.button("Salvar", use_container_width=True):
+                st.session_state.api_url = new_url
+                st.rerun()
+        
+        st.caption(f"Atual: {current_url}")
+        
+        # Instruções
+        st.markdown("""
+        ---
+        **Como usar:**
+        1. Execute a API local
+        2. Execute ngrok
+        3. Cole a URL aqui
+        """)
     
+    st.markdown("---")
     # Status da API e sistemas
     st.markdown("### 🔌 Status dos Sistemas")
     

@@ -19,9 +19,11 @@ try:
     from openai import OpenAI
     from dotenv import load_dotenv
     load_dotenv()
-    OPENAI_AVAILABLE = bool(os.getenv("OPENAI_API_KEY"))
+    openai_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
+    OPENAI_AVAILABLE = bool(openai_key)
     if OPENAI_AVAILABLE:
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        client = OpenAI(api_key=openai_key)
+
 except:
     OPENAI_AVAILABLE = False
     client = None

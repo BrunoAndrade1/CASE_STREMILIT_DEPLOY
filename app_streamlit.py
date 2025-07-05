@@ -10,6 +10,10 @@ import re
 import os
 from typing import Dict, Optional, Any
 
+# Inicializar session state para controle do spaCy
+if 'use_spacy' not in st.session_state:
+    st.session_state.use_spacy = True  # Ativado por padrão
+
 # Tentar importar OpenAI
 try:
     from openai import OpenAI
@@ -22,23 +26,26 @@ except:
     OPENAI_AVAILABLE = False
     client = None
 
-# Tentar importar spaCy
-# Novo Bloco (para colocar no lugar)
-try:
-    st.write("DEBUG: Tentando importar spacy...")
-    import spacy
-    st.write("DEBUG: spaCy importado com sucesso!")
+# Tentar importar spaCy APENAS se estiver ativado
+SPACY_AVAILABLE = False
+nlp = None
 
-    st.write("DEBUG: Tentando carregar o modelo de linguagem 'pt_core_news_sm'...")
-    nlp = spacy.load("pt_core_news_sm")
-    st.write("DEBUG: Modelo spaCy carregado com sucesso!")
-
-    SPACY_AVAILABLE = True
-except Exception as e:
-    # ISSO IRÁ IMPRIMIR O ERRO REAL NA TELA
-    st.error(f"ERRO DETALHADO DO SPACY: {e}")
-    SPACY_AVAILABLE = False
-    nlp = None
+if st.session_state.use_spacy:
+    try:
+        import spacy
+        # Tentar carregar modelo em português ou inglês
+        try:
+            nlp = spacy.load("pt_core_news_sm")
+        except:
+            try:
+                nlp = spacy.load("en_core_web_sm")
+            except:
+                # Se não tiver modelo, criar pipeline básico
+                nlp = spacy.blank("pt")
+        SPACY_AVAILABLE = True
+    except:
+        SPACY_AVAILABLE = False
+        nlp = None
 
 # Configuração da página
 st.set_page_config(
@@ -49,8 +56,7 @@ st.set_page_config(
 )
 
 # Configurações
-API_URL = os.getenv("KICKSTARTER_API_URL", "https://api-case-6sy7.onrender.com")
-st.write(f"DEBUG: Tentando conectar na API em: {API_URL}")
+API_URL = os.getenv("KICKSTARTER_API_URL", "http://localhost:8000")
 
 # Base de dados de usuários (requisito do case)
 USERS_DATABASE = {
@@ -207,7 +213,7 @@ if 'extraction_method' not in st.session_state:
 def check_api_health():
     """Verifica se a API está online"""
     try:
-        response = requests.get(f"{API_URL}/health", timeout=60)
+        response = requests.get(f"{API_URL}/health", timeout=5)
         return response.status_code == 200
     except:
         return False
@@ -368,7 +374,7 @@ def extract_with_spacy_improved(message: str) -> Optional[Dict[str, Any]]:
     """
     Versão melhorada do extrator spaCy com pré-processamento
     """
-    if not SPACY_AVAILABLE:
+    if not SPACY_AVAILABLE or not st.session_state.use_spacy:
         return None
     
     try:
@@ -523,14 +529,14 @@ def extract_with_spacy_improved(message: str) -> Optional[Dict[str, Any]]:
 # Modificar a função extract_project_info_from_message para usar a versão melhorada
 def extract_project_info_from_message(message):
     """Extrai informações do projeto da mensagem do usuário"""
-    # Primeiro tenta com spaCy melhorado
-    if SPACY_AVAILABLE:
+    # Primeiro tenta com spaCy melhorado SE ESTIVER ATIVADO
+    if SPACY_AVAILABLE and st.session_state.use_spacy:
         project_data = extract_with_spacy_improved(message)
         if project_data:
             st.session_state.extraction_method = "spaCy (local/gratuito)"
             return project_data 
     
-    # Se spaCy falhar e OpenAI estiver disponível
+    # Se spaCy falhar ou estiver desativado e OpenAI estiver disponível
     if OPENAI_AVAILABLE and client:
         try:
             prompt = f"""
@@ -558,78 +564,14 @@ def extract_project_info_from_message(message):
             json_match = re.search(r'\{.*\}', json_text, re.DOTALL)
             if json_match:
                 extracted_data = json.loads(json_match.group())
-                st.session_state.extraction_method = "OpenAI GPT-3.5 (fallback)"
+                st.session_state.extraction_method = "OpenAI GPT-3.5 (principal)" if not st.session_state.use_spacy else "OpenAI GPT-3.5 (fallback)"
                 return extracted_data
         except Exception as e:
             print(f"Erro com OpenAI: {e}")
     
     return None
 
-# BOTÃO TEMPORÁRIO PARA TREINAR MODELO - ADICIONE ANTES DAS BOAS-VINDAS
-# Verificar se o modelo precisa ser treinado
-try:
-    health_response = requests.get(f"{API_URL}/health", timeout=5)
-    health_data = health_response.json() if health_response.status_code == 200 else {}
-    model_loaded = health_data.get('model_loaded', False)
-except:
-    model_loaded = False
-
-if not model_loaded:
-    st.markdown("---")
-    col1_train, col2_train, col3_train = st.columns([1, 2, 1])
-    with col2_train:
-        st.markdown("### 🚨 CONFIGURAÇÃO INICIAL DO MODELO")
-        st.warning("⚠️ O modelo ainda não foi treinado na API. É necessário treinar o modelo antes de usar o sistema.")
-        
-        if st.button("🚀 TREINAR MODELO NA API", type="primary", use_container_width=True):
-            with st.spinner("Iniciando treinamento do modelo... Isso pode levar 2-5 minutos."):
-                try:
-                    response = requests.post(f"{API_URL}/train", timeout=30)
-                    result = response.json()
-                    
-                    if response.status_code == 200:
-                        st.success(f"✅ {result.get('message', 'Treinamento iniciado com sucesso!')}")
-                        st.info("📊 O treinamento demora cerca de 2-5 minutos. Use o botão abaixo para verificar o status.")
-                        st.balloons()
-                    else:
-                        st.error(f"❌ Erro ao iniciar treinamento: {result}")
-                except Exception as e:
-                    st.error(f"❌ Erro ao conectar com a API: {str(e)}")
-        
-        # Botão para verificar status
-        if st.button("🔍 Verificar Status do Modelo", use_container_width=True):
-            try:
-                response = requests.get(f"{API_URL}/health", timeout=10)
-                health_data = response.json()
-                
-                if health_data.get('model_loaded'):
-                    st.success("✅ Modelo carregado e pronto para uso! 🎉")
-                    st.info("🔄 Recarregue a página para começar a usar o sistema.")
-                    time.sleep(2)
-                    st.rerun()
-                else:
-                    st.warning("⏳ Modelo ainda está sendo treinado. Aguarde mais um pouco...")
-                    st.json(health_data)
-            except Exception as e:
-                st.error(f"❌ Erro ao verificar status: {str(e)}")
-        
-        # Mostrar informações sobre o processo
-        with st.expander("ℹ️ Sobre o processo de treinamento"):
-            st.markdown("""
-            **O que acontece durante o treinamento:**
-            1. 📥 Download automático dos dados do Kickstarter
-            2. 🧹 Limpeza e preparação dos dados
-            3. 🤖 Treinamento do modelo de Machine Learning
-            4. 💾 Salvamento do modelo treinado
-            5. ✅ Disponibilização para uso
-            
-            **Tempo estimado:** 2-5 minutos
-            
-            **Nota:** Este processo só precisa ser feito uma vez.
-            """)
-    
-    st.markdown("---")
-    st.stop()  # Para a execução aqui se o modelo não estiver carregado
+# Adicione este código ANTES do container do chat (após o CSS customizado e antes de "# Layout com Chat no Topo")
 
 # Seção de Boas-Vindas e Instruções
 st.markdown("""
@@ -782,6 +724,7 @@ st.markdown("""
 <div style="height: 2px; background: linear-gradient(to right, transparent, #667eea, #764ba2, transparent); margin: 20px 0;"></div>
 """, unsafe_allow_html=True)
 
+# Adicionar exemplos de uso no início do chat
 def get_initial_chat_message():
     """Retorna mensagem inicial com exemplos para o usuário"""
     return """
@@ -858,7 +801,7 @@ def extract_with_spacy(message: str) -> Optional[Dict[str, Any]]:
     Extrai informações do projeto usando spaCy e regex.
     Retorna None se não conseguir extrair informações suficientes.
     """
-    if not SPACY_AVAILABLE:
+    if not SPACY_AVAILABLE or not st.session_state.use_spacy:
         return None
     
     try:
@@ -1026,8 +969,7 @@ def get_chat_response(user_message, context=None):
                 
                 # Fazer predição real com a API diretamente
                 try:
-                    # Linha corrigida
-                    response = requests.post(f"{API_URL}/predict", json=project_data_for_api, timeout=90)
+                    response = requests.post(f"{API_URL}/predict", json=project_data_for_api)
                     
                     if response.status_code == 200:
                         prediction_result = response.json()
@@ -1367,3 +1309,983 @@ def optimize_campaign_strategy(project_data, prediction_result):
     """
     
     return get_chat_response(prompt)
+
+# Layout com Chat no Topo
+# Chat fixo na parte superior com layout melhorado
+with st.container():
+    st.markdown('<div class="top-chat-container">', unsafe_allow_html=True)
+    
+    # Header do chat
+    chat_header_col1, chat_header_col2, chat_header_col3 = st.columns([1, 3, 1])
+    with chat_header_col2:
+        #st.markdown("### 💬 AI Assistant")
+        if st.session_state.user_email and st.session_state.user_email != "default":
+            st.caption(f"👤 Conversando com: {st.session_state.user_data['nome']}")
+        
+        # Mostrar status dos sistemas
+        status_cols = st.columns(3)
+        with status_cols[0]:
+            if SPACY_AVAILABLE:
+                st.success("✅ spaCy")
+            else:
+                st.error("❌ spaCy")
+        with status_cols[1]:
+            if OPENAI_AVAILABLE:
+                st.success("✅ OpenAI")
+            else:
+                st.warning("⚠️ OpenAI")
+        with status_cols[2]:
+            if check_api_health():
+                st.success("✅ API")
+            else:
+                st.error("❌ API")
+    
+    # Container do chat
+    chat_main_col1, chat_main_col2, chat_main_col3 = st.columns([0.5, 4, 0.5])
+    
+    with chat_main_col2:
+        # Área de mensagens expandida
+        chat_area = st.container(height=250)
+        with chat_area:
+            # Se não houver mensagens, mostrar mensagem inicial
+            if len(st.session_state.chat_messages) == 0:
+                initial_msg = get_initial_chat_message()
+                st.markdown(f'<div class="chat-message assistant-message">🤖</div>', 
+                          unsafe_allow_html=True)
+                st.markdown(initial_msg, unsafe_allow_html=True)
+            else:
+                # Mostrar mensagens completas
+                for message in st.session_state.chat_messages[-5:]:  # Últimas 5 mensagens
+                    if message["role"] == "user":
+                        st.markdown(f'<div class="chat-message user-message">👤 {message["content"]}</div>', 
+                                  unsafe_allow_html=True)
+                    else:
+                        # Mostrar resposta completa do bot
+                        st.markdown(f'<div class="chat-message assistant-message">🤖</div>', 
+                                  unsafe_allow_html=True)
+                        # Usar markdown para formatar a resposta completa
+                        st.markdown(message["content"], unsafe_allow_html=True)
+        
+        # Área de input
+        input_col1, input_col2, input_col3 = st.columns([10, 1, 1])
+        
+        with input_col1:
+            user_input = st.text_input(
+                "Digite sua pergunta:", 
+                key="top_chat_input", 
+                label_visibility="collapsed", 
+                placeholder="Ex: Analise meu projeto: Nome: power Categoria: Film & Video Meta: $10,000 País: US Início: 2025-07-03 Fim: 2025-08-02"
+            )
+        
+        with input_col2:
+            if st.button("📤 Enviar", key="top_send", use_container_width=True):
+                if user_input:
+                    # Adicionar mensagem do usuário
+                    st.session_state.chat_messages.append({"role": "user", "content": user_input})
+                    
+                    # Obter resposta
+                    with st.spinner("Analisando..."):
+                        response = get_chat_response(user_input, st.session_state.project_data)
+                    
+                    # Adicionar resposta
+                    st.session_state.chat_messages.append({"role": "assistant", "content": response})
+                    
+                    # Rerun para mostrar nova mensagem
+                    st.rerun()
+        
+        with input_col3:
+            if st.button("🗑️", key="top_clear", help="Limpar chat", use_container_width=True):
+                st.session_state.chat_messages = []
+                st.session_state.extraction_method = None
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown("---")
+
+# Título principal
+st.title("🚀 Kickstarter Success Predictor")
+st.markdown("### Descubra as chances de sucesso do seu projeto antes de lançar!")
+
+# Tabs principais
+tab1, tab2, tab3 = st.tabs(["🔮 Predictor", "🤖 Análise AI", "📊 Dashboard"])
+
+with tab1:
+    # Layout principal - duas colunas
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.header("📝 Dados do Projeto")
+        
+        # Formulário de entrada
+        with st.form("project_form"):
+                # Identificação do usuário (NOVO - requisito do case)
+                st.markdown("### 👤 Identificação do Usuário")
+                user_email = st.text_input(
+                    "Email (opcional)",
+                    placeholder="seu@email.com",
+                    help="Se você já tem histórico conosco, suas informações serão consideradas na análise"
+                )
+                
+                # Buscar dados do usuário
+                user_data = USERS_DATABASE.get(user_email, USERS_DATABASE["default"])
+                if user_email and user_email in USERS_DATABASE:
+                    st.markdown(f"""
+                    <div class="user-profile-box">
+                    <strong>✅ Bem-vindo de volta, {user_data['nome']}!</strong><br>
+                    📊 Seu histórico: {user_data['projetos_historico']} projetos | Taxa de sucesso: {user_data['taxa_sucesso_pessoal']:.0%}<br>
+                    🏆 Experiência em: {', '.join(user_data['categorias_experiencia'])}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Nome do projeto
+                st.markdown("### 1️⃣ Nome do Projeto")
+                
+                # Categoria primeiro (para sugestões de título)
+                st.markdown("### 2️⃣ Categoria")
+                categories = load_categories()
+                
+                # Criar duas colunas para categoria
+                cat_col1, cat_col2 = st.columns([3, 1])
+                
+                with cat_col1:
+                    selected_category = st.selectbox(
+                        "Escolha a categoria mais adequada",
+                        options=list(categories.keys()),
+                        format_func=lambda x: f"{x} - {categories[x]['description']}"
+                    )
+                
+                with cat_col2:
+                    if selected_category:
+                        cat_success = categories[selected_category]['avg_success']
+                        st.metric("Taxa de Sucesso", cat_success)
+                
+                # Verificar se usuário tem experiência na categoria
+                if user_email in USERS_DATABASE and selected_category in user_data['categorias_experiencia']:
+                    st.success(f"✅ Você tem experiência em {selected_category}!")
+                
+                # Agora o título com sugestões baseadas na categoria
+                title_suggestions = {
+                    'Technology': [
+                        "Smart Home Assistant with AI Technology",
+                        "Revolutionary Solar-Powered Device",
+                        "Innovative Wireless Charging Solution",
+                        "Next Generation Smart Watch"
+                    ],
+                    'Games': [
+                        "Epic Adventure Board Game Experience", 
+                        "Strategic Card Game for Everyone",
+                        "Family-Friendly Puzzle Game Collection",
+                        "Ultimate RPG Tabletop Adventure"
+                    ],
+                    'Music': [
+                        "Debut Album Recording Project",
+                        "Live Concert Tour Experience", 
+                        "Professional Music Studio Equipment",
+                        "Original Soundtrack Creation"
+                    ],
+                    'Art': [
+                        "Contemporary Art Exhibition Series",
+                        "Digital Art Creation Workshop",
+                        "Community Mural Project Initiative",
+                        "Interactive Art Installation Experience"
+                    ],
+                    'Film & Video': [
+                        "Independent Documentary Film Project",
+                        "Short Film Production Series",
+                        "Virtual Reality Video Experience",
+                        "Educational Video Course Creation"
+                    ],
+                    'Design': [
+                        "Eco-Friendly Product Design Collection",
+                        "Minimalist Furniture Design Series",
+                        "Sustainable Fashion Accessories Line",
+                        "Innovative Kitchen Gadget Design"
+                    ],
+                    'Comics': [
+                        "Original Graphic Novel Series",
+                        "Superhero Comic Book Collection",
+                        "Manga-Inspired Story Adventure",
+                        "Illustrated Children's Book Series"
+                    ],
+                    'Food': [
+                        "Artisan Food Truck Launch",
+                        "Organic Recipe Book Collection",
+                        "Gourmet Cooking Class Series",
+                        "Sustainable Restaurant Opening Project"
+                    ]
+                }
+                
+                # Campo de sugestões
+                use_suggestion = st.checkbox("Ver sugestões de títulos")
+                
+                if use_suggestion and selected_category in title_suggestions:
+                    selected_suggestion = st.selectbox(
+                        "Escolha uma sugestão ou inspire-se:",
+                        ["Escrever meu próprio"] + title_suggestions.get(selected_category, [])
+                    )
+                    
+                    if selected_suggestion != "Escrever meu próprio":
+                        project_name = st.text_input(
+                            "Título do seu projeto",
+                            value=selected_suggestion,
+                            help="Use 4-7 palavras descritivas. Evite títulos muito curtos ou longos."
+                        )
+                    else:
+                        project_name = st.text_input(
+                            "Título do seu projeto",
+                            placeholder="Ex: Amazing Solar-Powered Backpack",
+                            help="Use 4-7 palavras descritivas. Evite títulos muito curtos ou longos."
+                        )
+                else:
+                    project_name = st.text_input(
+                        "Título do seu projeto",
+                        placeholder="Ex: Amazing Solar-Powered Backpack",
+                        help="Use 4-7 palavras descritivas. Evite títulos muito curtos ou longos."
+                    )
+                
+                # País
+                st.markdown("### 3️⃣ País")
+                selected_country = st.selectbox(
+                    "País de origem",
+                    options=list(COUNTRIES.keys()),
+                    format_func=lambda x: f"{x} - {COUNTRIES[x]}"
+                )
+                
+                # Meta financeira
+                st.markdown("### 4️⃣ Meta Financeira")
+                goal_amount = st.number_input(
+                    "Meta em dólares (USD)",
+                    min_value=100,
+                    max_value=1000000,
+                    value=10000,
+                    step=500,
+                    help="Converta para USD se estiver em outra moeda"
+                )
+                
+                # Mostrar referência de metas com base no histórico do usuário
+                if user_email in USERS_DATABASE and user_data['projetos_detalhes']:
+                    avg_goal = sum(p['meta'] for p in user_data['projetos_detalhes']) / len(user_data['projetos_detalhes'])
+                    st.info(f"💡 Sua meta média histórica: ${avg_goal:,.0f}")
+                
+                if goal_amount < 5000:
+                    st.info("💡 Meta baixa - Mais fácil de alcançar!")
+                elif goal_amount < 25000:
+                    st.success("✅ Meta na faixa ideal")
+                elif goal_amount < 50000:
+                    st.warning("⚠️ Meta alta - Precisará de estratégia forte")
+                else:
+                    st.error("🚨 Meta muito alta - Alto risco!")
+                
+                # Datas
+                st.markdown("### 5️⃣ Período da Campanha")
+                date_col1, date_col2 = st.columns(2)
+                
+                with date_col1:
+                    launch_date = st.date_input(
+                        "Data de lançamento",
+                        value=datetime.now(),
+                        min_value=datetime.now()
+                    )
+                
+                with date_col2:
+                    deadline_date = st.date_input(
+                        "Data limite",
+                        value=datetime.now() + timedelta(days=30),
+                        min_value=launch_date + timedelta(days=1)
+                    )
+                
+                # Calcular duração
+                campaign_days = (deadline_date - launch_date).days
+                
+                if campaign_days < 20:
+                    st.warning(f"⚠️ Campanha muito curta: {campaign_days} dias")
+                elif campaign_days > 45:
+                    st.warning(f"⚠️ Campanha muito longa: {campaign_days} dias")
+                else:
+                    st.success(f"✅ Duração ideal: {campaign_days} dias")
+                
+                # Botão de submit
+                submitted = st.form_submit_button("🔮 Prever Sucesso", use_container_width=True)
+
+    # Coluna 2 - Resultados
+    with col2:
+            st.header("📊 Análise e Predição")
+            
+            if submitted:
+                # Salvar dados do usuário no session state
+                st.session_state.user_data = user_data
+                st.session_state.user_email = user_email
+                
+                # Verificar se temos o nome do projeto
+                if not project_name:
+                    st.warning("⚠️ Por favor, insira o nome do projeto")
+                else:
+                    # Preparar dados para API
+                    project_data = {
+                        "name": project_name,
+                        "main_category": selected_category,
+                        "country": selected_country,
+                        "usd_goal_real": float(goal_amount),
+                        "launched": launch_date.strftime("%Y-%m-%d"),
+                        "deadline": deadline_date.strftime("%Y-%m-%d"),
+                        "campaign_days": campaign_days
+                    }
+                    
+                    # Salvar no session state
+                    st.session_state.project_data = project_data
+                
+                    # Fazer requisição
+                    with st.spinner("Analisando seu projeto..."):
+                        try:
+                            response = requests.post(f"{API_URL}/predict", json=project_data)
+                            
+                            if response.status_code == 200:
+                                result = response.json()
+                                st.session_state.prediction_result = result
+                                
+                                # Extrair resultados
+                                probability = result['success_probability']
+                                prediction = result['prediction']
+                                confidence = result['confidence']
+                                recommendations = result['recommendations']
+                                threshold = result['threshold_used']
+                                
+                                # Criar gauge chart
+                                fig = go.Figure(go.Indicator(
+                                    mode="gauge+number+delta",
+                                    value=probability * 100,
+                                    domain={'x': [0, 1], 'y': [0, 1]},
+                                    title={'text': "Probabilidade de Sucesso"},
+                                    delta={'reference': threshold * 100, 'relative': True},
+                                    gauge={
+                                        'axis': {'range': [None, 100]},
+                                        'bar': {'color': "darkblue"},
+                                        'steps': [
+                                            {'range': [0, 30], 'color': "lightgray"},
+                                            {'range': [30, 70], 'color': "gray"}
+                                        ],
+                                        'threshold': {
+                                            'line': {'color': "red", 'width': 4},
+                                            'thickness': 0.75,
+                                            'value': threshold * 100
+                                        }
+                                    }
+                                ))
+                                
+                                fig.update_layout(height=300)
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Métricas principais
+                                metric_col1, metric_col2 = st.columns(2)
+                                
+                                with metric_col1:
+                                    st.metric(
+                                        "Probabilidade",
+                                        f"{probability:.1%}",
+                                        delta=f"{(probability - threshold)*100:.1f}% do threshold"
+                                    )
+                                
+                                with metric_col2:
+                                    color = "🟢" if prediction == "Sucesso" else "🔴"
+                                    st.metric("Predição", f"{color} {prediction}")
+                                
+                                # Análise personalizada para o usuário
+                                if user_email in USERS_DATABASE:
+                                    st.markdown("### 🎯 Análise Personalizada")
+                                    
+                                    # Comparar com histórico pessoal
+                                    if user_data['taxa_sucesso_pessoal'] > 0:
+                                        if probability > user_data['taxa_sucesso_pessoal']:
+                                            st.success(f"📈 Este projeto tem potencial {(probability - user_data['taxa_sucesso_pessoal'])*100:.1f}% acima da sua média histórica ({user_data['taxa_sucesso_pessoal']:.0%})!")
+                                        else:
+                                            st.warning(f"📉 Este projeto está {(user_data['taxa_sucesso_pessoal'] - probability)*100:.1f}% abaixo da sua média histórica ({user_data['taxa_sucesso_pessoal']:.0%})")
+                                    
+                                    # Verificar experiência na categoria
+                                    if selected_category in user_data['categorias_experiencia']:
+                                        st.info(f"✅ Sua experiência em {selected_category} é um diferencial importante!")
+                                    else:
+                                        st.warning(f"⚠️ Primeira vez em {selected_category}? Considere buscar mentoria ou parceiros experientes nesta categoria.")
+                                    
+                                    # Mostrar projetos similares do histórico
+                                    similar_projects = [p for p in user_data.get('projetos_detalhes', []) if p['categoria'] == selected_category]
+                                    if similar_projects:
+                                        st.markdown("#### 📚 Seus projetos anteriores nesta categoria:")
+                                        for proj in similar_projects:
+                                            emoji = "✅" if proj['sucesso'] else "❌"
+                                            st.caption(f"{emoji} {proj['nome']} - Meta: ${proj['meta']:,}")
+                                
+                                # Recomendações
+                                st.markdown("### 💡 Recomendações Personalizadas")
+                                
+                                for rec in recommendations:
+                                    if "✅" in rec:
+                                        st.success(rec)
+                                    elif "⚠️" in rec:
+                                        st.warning(rec)
+                                    elif "🔴" in rec:
+                                        st.error(rec)
+                                    elif "💡" in rec:
+                                        st.info(rec)
+                                    else:
+                                        st.write(rec)
+                                
+                                # Botões de ação rápida
+                                st.markdown("### 🚀 Ações Rápidas com AI")
+                                
+                                col_a1, col_a2 = st.columns(2)
+                                
+                                with col_a1:
+                                    if st.button("📝 Melhorar Título", use_container_width=True):
+                                        with st.spinner("Gerando sugestões..."):
+                                            suggestions = generate_title_suggestions(project_name, selected_category)
+                                            st.info(suggestions)
+                                
+                                with col_a2:
+                                    if st.button("📋 Gerar Estratégia", use_container_width=True):
+                                        with st.spinner("Criando estratégia..."):
+                                            strategy = optimize_campaign_strategy(project_data, result)
+                                            st.info(strategy)
+                                
+                                # Análise detalhada
+                                with st.expander("📈 Ver Análise Detalhada"):
+                                    st.markdown("### Fatores que influenciaram a predição:")
+                                    
+                                    # Criar dataframe com os fatores
+                                    factors_data = {
+                                        'Fator': [
+                                            f'Categoria ({selected_category})',
+                                            f'Meta (${goal_amount:,})',
+                                            f'Duração ({campaign_days} dias)',
+                                            f'País ({selected_country})',
+                                            f'Título ({len(project_name.split())} palavras)'
+                                        ],
+                                        'Impacto': [
+                                            float(categories[selected_category]['avg_success'].rstrip('%')),
+                                            max(0, 100 - (goal_amount / 500)),  # Simplificado
+                                            100 if 25 <= campaign_days <= 35 else 50,
+                                            80 if selected_country == 'US' else 60,
+                                            80 if 4 <= len(project_name.split()) <= 7 else 50
+                                        ]
+                                    }
+                                    
+                                    df_factors = pd.DataFrame(factors_data)
+                                    
+                                    fig_factors = px.bar(
+                                        df_factors, 
+                                        x='Impacto', 
+                                        y='Fator',
+                                        orientation='h',
+                                        title='Impacto de cada fator na predição',
+                                        color='Impacto',
+                                        color_continuous_scale='RdYlGn'
+                                    )
+                                    
+                                    st.plotly_chart(fig_factors, use_container_width=True)
+                                    
+                                    # Comparação com projetos similares
+                                    st.markdown("### 📊 Comparação com projetos similares")
+                                    st.info(f"""
+                                    **Categoria {selected_category}:**
+                                    - Taxa de sucesso média: {categories[selected_category]['avg_success']}
+                                    - Sua probabilidade: {probability:.1%}
+                                    - Diferença: {probability*100 - float(categories[selected_category]['avg_success'].rstrip('%')):.1f}%
+                                    """)
+                                    
+                            else:
+                                st.error(f"Erro na API: {response.status_code}")
+                                st.json(response.json())
+                                
+                        except requests.exceptions.ConnectionError:
+                            st.error("❌ Não foi possível conectar com a API. Verifique se está rodando em http://localhost:8000")
+                        except Exception as e:
+                            st.error(f"Erro: {str(e)}")
+            else:
+                # Estado inicial - mostrar informações
+                st.markdown("""
+                <div class="info-box">
+                <h4>🎯 Como usar:</h4>
+                <ol>
+                <li>Identifique-se (opcional) para análise personalizada</li>
+                <li>Preencha os dados do seu projeto</li>
+                <li>Clique em "Prever Sucesso"</li>
+                <li>Veja a análise detalhada e recomendações</li>
+                <li>Use o chat AI para tirar dúvidas específicas</li>
+                </ol>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Gráfico de exemplo - taxas por categoria
+                categories = load_categories()
+                cat_names = list(categories.keys())
+                cat_success_rates = [float(categories[cat]['avg_success'].rstrip('%')) for cat in cat_names]
+                
+                df_categories = pd.DataFrame({
+                    'Categoria': cat_names,
+                    'Taxa de Sucesso (%)': cat_success_rates
+                }).sort_values('Taxa de Sucesso (%)', ascending=True)
+                
+                fig_cats = px.bar(
+                    df_categories,
+                    x='Taxa de Sucesso (%)',
+                    y='Categoria',
+                    orientation='h',
+                    title='Taxa de Sucesso por Categoria (Histórico)',
+                    color='Taxa de Sucesso (%)',
+                    color_continuous_scale='RdYlGn',
+                    range_x=[0, 70]
+                )
+                
+                fig_cats.update_layout(height=500)
+                st.plotly_chart(fig_cats, use_container_width=True)
+
+# Tab 2 - Análise AI
+with tab2:
+        st.header("🤖 Análise Aprofundada com AI")
+        
+        if st.session_state.project_data and st.session_state.prediction_result:
+            col_ai1, col_ai2 = st.columns([1, 1])
+            
+            with col_ai1:
+                st.subheader("📊 Dados do Projeto Atual")
+                st.json(st.session_state.project_data)
+                
+                # Mostrar dados do usuário se disponível
+                if st.session_state.user_email and st.session_state.user_email in USERS_DATABASE:
+                    st.subheader("👤 Perfil do Usuário")
+                    user_info = st.session_state.user_data
+                    st.info(f"""
+                    **{user_info['nome']}** - {user_info['cargo']}
+                    - Experiência: {user_info['experiencia_anos']} anos
+                    - Projetos: {user_info['projetos_historico']}
+                    - Taxa de sucesso: {user_info['taxa_sucesso_pessoal']:.0%}
+                    - Expertise: {', '.join(user_info['categorias_experiencia'])}
+                    """)
+                
+                st.subheader("🎯 Resultado da Predição")
+                prob = st.session_state.prediction_result['success_probability']
+                if prob >= 0.7:
+                    st.success(f"Probabilidade: {prob:.1%}")
+                elif prob >= 0.3:
+                    st.warning(f"Probabilidade: {prob:.1%}")
+                else:
+                    st.error(f"Probabilidade: {prob:.1%}")
+            
+            with col_ai2:
+                st.subheader("💡 Análise Inteligente")
+                
+                if st.button("🔍 Gerar Análise Completa", use_container_width=True):
+                    with st.spinner("Analisando com AI..."):
+                        analysis = analyze_project_with_ai(
+                            st.session_state.project_data,
+                            st.session_state.prediction_result
+                        )
+                        st.markdown(analysis)
+                
+                st.markdown("---")
+                
+                # Ferramentas específicas
+                st.subheader("🛠️ Ferramentas de Otimização")
+                
+                tool_col1, tool_col2 = st.columns(2)
+                
+                with tool_col1:
+                    if st.button("📝 Otimizar Título", use_container_width=True):
+                        with st.spinner("Gerando títulos..."):
+                            titles = generate_title_suggestions(
+                                st.session_state.project_data['name'],
+                                st.session_state.project_data['main_category']
+                            )
+                            st.info(titles)
+                    
+                    if st.button("💰 Analisar Meta", use_container_width=True):
+                        with st.spinner("Analisando meta..."):
+                            user_context = ""
+                            if st.session_state.user_data and st.session_state.user_data != USERS_DATABASE["default"]:
+                                user_context = f"Considerando que {st.session_state.user_data['nome']} tem histórico de {st.session_state.user_data['projetos_historico']} projetos com taxa de sucesso de {st.session_state.user_data['taxa_sucesso_pessoal']:.0%}, "
+                            
+                            prompt = f"""
+                            {user_context}analise se a meta de ${st.session_state.project_data['usd_goal_real']:,.2f} 
+                            é adequada para um projeto de {st.session_state.project_data['main_category']} 
+                            no {st.session_state.project_data['country']}.
+                            
+                            Compare com projetos similares bem-sucedidos e sugira ajustes se necessário.
+                            """
+                            analysis = get_chat_response(prompt)
+                            st.info(analysis)
+                
+                with tool_col2:
+                    if st.button("📅 Plano de 30 Dias", use_container_width=True):
+                        with st.spinner("Criando plano..."):
+                            strategy = optimize_campaign_strategy(
+                                st.session_state.project_data,
+                                st.session_state.prediction_result
+                            )
+                            st.info(strategy)
+                    
+                    if st.button("🎁 Estrutura de Recompensas", use_container_width=True):
+                        with st.spinner("Criando recompensas..."):
+                            user_context = ""
+                            if st.session_state.user_data and st.session_state.user_data != USERS_DATABASE["default"]:
+                                user_context = f"Considerando a experiência de {st.session_state.user_data['nome']} em {', '.join(st.session_state.user_data['categorias_experiencia'])}, "
+                            
+                            prompt = f"""
+                            {user_context}crie uma estrutura de recompensas para este projeto:
+                            {json.dumps(st.session_state.project_data, indent=2)}
+                            
+                            Inclua:
+                            1. Early bird (25% desconto)
+                            2. Níveis regulares (pelo menos 5)
+                            3. Recompensa premium
+                            4. Preços e o que cada nível recebe
+                            
+                            Seja criativo e específico para a categoria {st.session_state.project_data['main_category']}.
+                            """
+                            rewards = get_chat_response(prompt)
+                            st.info(rewards)
+        else:
+            st.info("👈 Primeiro faça uma predição na aba 'Predictor' para usar a análise AI")
+
+# Tab 3 - Dashboard
+with tab3:
+        st.header("📊 Dashboard de Insights")
+        
+        # Estatísticas gerais
+        col_stats1, col_stats2, col_stats3, col_stats4 = st.columns(4)
+        
+        with col_stats1:
+            st.metric("Projetos Analisados", "378,661")
+        with col_stats2:
+            st.metric("Taxa de Sucesso Geral", "35.9%")
+        with col_stats3:
+            st.metric("Meta Média de Sucesso", "$9,426")
+        with col_stats4:
+            st.metric("Duração Média", "33 dias")
+        
+        # Mostrar estatísticas do usuário atual se logado
+        if st.session_state.user_email and st.session_state.user_email in USERS_DATABASE:
+            st.markdown("### 👤 Suas Estatísticas Pessoais")
+            user_stats_col1, user_stats_col2, user_stats_col3, user_stats_col4 = st.columns(4)
+            
+            with user_stats_col1:
+                st.metric("Seus Projetos", st.session_state.user_data['projetos_historico'])
+            with user_stats_col2:
+                st.metric("Sua Taxa de Sucesso", f"{st.session_state.user_data['taxa_sucesso_pessoal']:.0%}")
+            with user_stats_col3:
+                st.metric("Anos de Experiência", st.session_state.user_data['experiencia_anos'])
+            with user_stats_col4:
+                st.metric("Categorias", len(st.session_state.user_data['categorias_experiencia']))
+        
+        # Gráficos de insights
+        categories = load_categories()
+        
+        # Gráfico 1: Taxa de sucesso por categoria
+        cat_names = list(categories.keys())
+        cat_success_rates = [float(categories[cat]['avg_success'].rstrip('%')) for cat in cat_names]
+        
+        df_cat_success = pd.DataFrame({
+            'Categoria': cat_names,
+            'Taxa de Sucesso (%)': cat_success_rates
+        }).sort_values('Taxa de Sucesso (%)', ascending=True)
+        
+        fig_success = px.bar(
+            df_cat_success,
+            x='Taxa de Sucesso (%)',
+            y='Categoria',
+            orientation='h',
+            title='Taxa de Sucesso por Categoria',
+            color='Taxa de Sucesso (%)',
+            color_continuous_scale='RdYlGn'
+        )
+        
+        st.plotly_chart(fig_success, use_container_width=True)
+        
+        # Gráfico 2: Distribuição de metas
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            # Simulação de dados de distribuição de metas
+            goal_ranges = ['< $1k', '$1k-5k', '$5k-10k', '$10k-25k', '$25k-50k', '> $50k']
+            success_by_goal = [45, 42, 38, 28, 18, 12]
+            
+            fig_goal_success = px.bar(
+                x=goal_ranges,
+                y=success_by_goal,
+                title='Taxa de Sucesso por Faixa de Meta',
+                labels={'x': 'Faixa de Meta', 'y': 'Taxa de Sucesso (%)'},
+                color=success_by_goal,
+                color_continuous_scale='RdYlGn'
+            )
+            
+            st.plotly_chart(fig_goal_success, use_container_width=True)
+        
+        with col_chart2:
+            # Simulação de dados de duração
+            duration_ranges = ['< 20 dias', '20-30 dias', '30-40 dias', '40-50 dias', '> 50 dias']
+            success_by_duration = [25, 42, 38, 28, 15]
+            
+            fig_duration_success = px.bar(
+                x=duration_ranges,
+                y=success_by_duration,
+                title='Taxa de Sucesso por Duração da Campanha',
+                labels={'x': 'Duração', 'y': 'Taxa de Sucesso (%)'},
+                color=success_by_duration,
+                color_continuous_scale='RdYlGn'
+            )
+            
+            st.plotly_chart(fig_duration_success, use_container_width=True)
+        
+        # Insights principais
+        st.markdown("### 💡 Insights Principais")
+        
+        col_insight1, col_insight2 = st.columns(2)
+        
+        with col_insight1:
+            st.info("""
+            **🎯 Melhores Práticas Identificadas:**
+            - Campanhas de 30 dias têm 42% de sucesso
+            - Metas abaixo de $10k têm 2x mais chance
+            - Lançar na terça aumenta em 20% as chances
+            - Vídeo de qualidade aumenta em 40% a conversão
+            """)
+        
+        with col_insight2:
+            st.warning("""
+            **⚠️ Principais Armadilhas:**
+            - Metas acima de $50k têm apenas 12% de sucesso
+            - Campanhas > 45 dias perdem momentum
+            - Títulos genéricos reduzem em 25% as chances
+            - Falta de atualizações afasta apoiadores
+            """)
+
+# Sidebar com informações
+with st.sidebar:
+    st.header("ℹ️ Como funciona")
+    
+    # Status da API e sistemas
+    st.markdown("### 🔌 Status dos Sistemas")
+    
+    api_status = check_api_health()
+    if api_status:
+        st.success("✅ API Online")
+    else:
+        st.error("❌ API Offline - Verifique se está rodando")
+    
+    # NOVO: Controle do spaCy
+    st.markdown("### 🤖 Controle de Extração")
+    
+    col_spacy1, col_spacy2 = st.columns([3, 1])
+    
+    with col_spacy1:
+        if st.session_state.use_spacy:
+            if SPACY_AVAILABLE:
+                st.success("✅ spaCy Ativo")
+            else:
+                st.warning("⚠️ spaCy não instalado")
+        else:
+            st.info("🔌 spaCy Desativado")
+    
+    with col_spacy2:
+        if st.button("🔄", help="Alternar spaCy", use_container_width=True):
+            st.session_state.use_spacy = not st.session_state.use_spacy
+            st.rerun()
+    
+    # Explicação do modo atual
+    if st.session_state.use_spacy:
+        st.caption("**Modo Híbrido:** spaCy → OpenAI")
+        st.caption("Extração local e gratuita primeiro")
+    else:
+        st.caption("**Modo OpenAI:** Apenas OpenAI")
+        st.caption("Mais flexível, requer API key")
+    
+    st.markdown("---")
+    
+    # Status dos outros sistemas
+    if OPENAI_AVAILABLE:
+        st.success("✅ OpenAI Configurado")
+    else:
+        st.info("ℹ️ OpenAI não configurado (opcional)")
+    
+    # Mostrar usuário logado
+    if st.session_state.user_email and st.session_state.user_email in USERS_DATABASE:
+        st.markdown("---")
+        st.markdown(f"### 👤 Usuário Atual")
+        st.info(f"{st.session_state.user_data['nome']}")
+        if st.button("🚪 Sair", use_container_width=True):
+            st.session_state.user_email = None
+            st.session_state.user_data = USERS_DATABASE["default"]
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Informações sobre o sistema híbrido
+    st.markdown("### 🤖 Sistema Híbrido")
+    
+    with st.expander("ℹ️ Como funciona", expanded=False):
+        if st.session_state.use_spacy:
+            st.markdown("""
+            **Modo Híbrido Ativo:**
+            1. **spaCy** (primário)
+               - Gratuito e local
+               - Patterns regex
+            2. **OpenAI** (fallback)
+               - Se spaCy falhar
+               - Mais flexível
+            """)
+        else:
+            st.markdown("""
+            **Modo OpenAI Puro:**
+            - Extração apenas via OpenAI
+            - Mais flexível e inteligente
+            - Requer API key configurada
+            - Sem processamento local
+            """)
+        
+        st.markdown("""
+        **Predições:**
+        - Sempre via API real
+        - Nunca inventa números
+        """)
+    
+    if st.session_state.extraction_method:
+        st.info(f"Última extração: {st.session_state.extraction_method}")
+    
+    st.markdown("---")
+    
+    st.markdown("""
+    ### 📊 O que influencia o sucesso?
+    
+    1. **Categoria do projeto** (40%)
+       - Mais importante fator
+       - Dance e Theater têm melhores taxas
+       
+    2. **Meta financeira** (30%)
+       - Metas menores = mais fácil
+       - Sweet spot: $3,000-$10,000
+       
+    3. **Duração da campanha** (15%)
+       - Ideal: 25-35 dias
+       - Muito curta ou longa = ruim
+       
+    4. **Outros fatores** (15%)
+       - País, título, timing
+       - Histórico do criador
+    """)
+    
+    #st.markdown("---")
+    
+    st.markdown("""
+    ### 🎯 Threshold: 31.7%
+    
+    O modelo classifica como "Sucesso" 
+    projetos com mais de 31.7% de chance.
+    
+    Isso foi otimizado com base em 
+    300,000+ projetos reais!
+    """)
+    
+    st.markdown("---")
+    
+    # Usuários de exemplo
+    st.markdown("### 👥 Usuários de Teste")
+    st.caption("Para testar a personalização:")
+    st.code("""
+joao@example.com
+maria@example.com
+pedro@example.com
+    """, language="text")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: gray;'>
+    <p>Modelo treinado com 300,000+ projetos reais do Kickstarter | AUC-ROC: 0.733</p>
+    <p>⚠️ Lembre-se: Este é um modelo estatístico. O sucesso real depende da execução!</p>
+    <p>🤖 Sistema Híbrido: spaCy + OpenAI (opcional) + API Real</p>
+    <p>👥 Base de usuários integrada para análise personalizada</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Adicionar informações técnicas no final
+with st.expander("🔧 Informações Técnicas do Sistema"):
+    col_tech1, col_tech2 = st.columns(2)
+    
+    with col_tech1:
+        st.markdown("""
+        ### 📊 Features utilizadas:
+        1. **cat_success_rate** - Taxa histórica da categoria
+        2. **usd_goal_real** - Meta em USD
+        3. **campaign_days** - Duração em dias
+        4. **goal_magnitude** - Log10 da meta
+        5. **name_word_count** - Palavras no título
+        6. **country_success_rate** - Taxa do país
+        7. **launch_year** - Ano de lançamento
+        
+        ### 🤖 Sistema Híbrido:
+        - **spaCy**: Extração local com regex
+        - **OpenAI**: Fallback inteligente
+        - **API**: prediçoes na API
+        
+        """)
+    
+    with col_tech2:
+        st.markdown("""
+        ### 🎯 Métricas do modelo:
+        - **Algoritmo**: Gradient Boosting
+        - **AUC-ROC**: 0.7327
+        - **Threshold**: 31.7%
+        - **Cross-validation**: 5-fold
+        - **Dados de treino**: 265,340 projetos
+        - **Dados de teste**: 66,335 projetos
+        
+        ### 💬 Capacidades do Chat:
+        - **Extração automática** de projetos
+        - **Respostas contextuais**
+        - **Análise personalizada**
+        - **Sempre usa API real**
+        """)
+
+# Instruções de instalação
+with st.expander("📦 Configuração do Sistema Híbrido"):
+    st.markdown("""
+    ### Instalação Completa:
+    
+    ```bash
+    # 1. Instalar spaCy (RECOMENDADO)
+    pip install spacy
+    python -m spacy download pt_core_news_sm
+    # ou
+    python -m spacy download en_core_web_sm
+    
+    # 2. OpenAI (OPCIONAL - para fallback)
+    pip install openai python-dotenv
+    
+    # 3. Outras dependências
+    pip install streamlit pandas plotly requests
+    ```
+    
+    ### Configuração do .env (opcional):
+    ```
+    OPENAI_API_KEY=sua_chave_aqui
+    KICKSTARTER_API_URL=http://localhost:8000
+    ```
+    
+    ### Como funciona:
+    1. **spaCy tenta primeiro** - rápido e gratuito
+    2. **OpenAI como backup** - se spaCy falhar
+    3. **API sempre para predições** - dados reais
+    
+    ### Vantagens:
+    - ✅ Funciona sem OpenAI
+    - ✅ Extração inteligente
+    - ✅ Sempre usa dados reais da API
+    - ✅ Sistema robusto com fallback
+    """)
+
+# Script para mostrar notificação
+if st.session_state.user_email and st.session_state.user_email in USERS_DATABASE:
+    st.toast(f"👤 Logado como: {st.session_state.user_data['nome']}", icon="✅")
+
+# Mostrar método de extração se disponível
+if st.session_state.extraction_method:
+    st.toast(f"📝 Última extração: {st.session_state.extraction_method}", icon="ℹ️")

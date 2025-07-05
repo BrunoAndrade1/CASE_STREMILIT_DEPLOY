@@ -56,7 +56,13 @@ st.set_page_config(
 )
 
 # Configurações
-API_URL = os.getenv("KICKSTARTER_API_URL", "http://localhost:8000")
+def get_api_url():
+    if 'api_url' in st.session_state:
+        return st.session_state.api_url
+    return os.getenv("KICKSTARTER_API_URL", "http://localhost:8000")
+
+# Configurações
+API_URL = get_api_url()
 
 # Base de dados de usuários (requisito do case)
 USERS_DATABASE = {
@@ -209,11 +215,14 @@ if 'extraction_method' not in st.session_state:
     st.session_state.extraction_method = None
 
 # Verificar se API está online
+
 @st.cache_data(ttl=60)
 def check_api_health():
     """Verifica se a API está online"""
     try:
-        response = requests.get(f"{API_URL}/health", timeout=5)
+        # Usar a URL configurada dinamicamente
+        url = st.session_state.get('api_url', API_URL)
+        response = requests.get(f"{url}/health", timeout=5)
         return response.status_code == 200
     except:
         return False

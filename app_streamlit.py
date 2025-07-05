@@ -2068,9 +2068,12 @@ with tab3:
             """)
 
 # Sidebar com informações
+# Sidebar com informações
 with st.sidebar:
     st.header("ℹ️ Como funciona")
-        with st.expander("🔧 Configurar API", expanded=False):
+    
+    # ===== CONFIGURADOR DE API =====
+    with st.expander("🔧 Configurar API", expanded=False):
         st.markdown("### Conexão com a API")
         
         # Pegar URL atual ou usar padrão
@@ -2116,6 +2119,7 @@ with st.sidebar:
         """)
     
     st.markdown("---")
+    
     # Status da API e sistemas
     st.markdown("### 🔌 Status dos Sistemas")
     
@@ -2143,6 +2147,8 @@ with st.sidebar:
         if st.button("🔄", help="Alternar spaCy", use_container_width=True):
             st.session_state.use_spacy = not st.session_state.use_spacy
             st.rerun()
+    
+    # Resto do código da sidebar continua...
     
     # Explicação do modo atual
     if st.session_state.use_spacy:
